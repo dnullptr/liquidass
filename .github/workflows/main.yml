@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [main]
+    branches: [main, "car-play", "fix/**"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -82,6 +82,26 @@ jobs:
           brew install ldid make
           echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
 
+      - name: install altlist
+        run: |
+          git clone --depth 1 https://github.com/roothide/AltList /tmp/AltList
+          cd /tmp/AltList
+          SCHEME_FLAG=""
+          if [ "${{ matrix.scheme }}" = "rootless" ]; then
+            SCHEME_FLAG="THEOS_PACKAGE_SCHEME=rootless"
+          elif [ "${{ matrix.scheme }}" = "roothide" ]; then
+            SCHEME_FLAG="THEOS_PACKAGE_SCHEME=roothide"
+          fi
+          make clean
+          make FINALPACKAGE=1 ARCHS="arm64 arm64e" TARGET="$DEVICE_TARGET" $SCHEME_FLAG
+          mkdir -p "$THEOS/lib" "$THEOS/lib/iphone" "$THEOS/lib/iphone/rootless" "$THEOS/lib/iphone/roothide"
+          cp -Rv "./.theos/obj/AltList.framework" "$THEOS/lib/"
+          cp -Rv "./.theos/obj/AltList.framework" "$THEOS/lib/iphone/"
+          cp -Rv "./.theos/obj/AltList.framework" "$THEOS/lib/iphone/rootless/"
+          cp -Rv "./.theos/obj/AltList.framework" "$THEOS/lib/iphone/roothide/"
+          mkdir -p "$THEOS/include/AltList"
+          cp -v *.h "$THEOS/include/AltList/"
+
       - name: build (${{ matrix.scheme }})
         run: |
           SCHEME_FLAG=""
@@ -89,6 +109,8 @@ jobs:
             SCHEME_FLAG="THEOS_PACKAGE_SCHEME=rootless"
           elif [ "${{ matrix.scheme }}" = "roothide" ]; then
             SCHEME_FLAG="THEOS_PACKAGE_SCHEME=roothide"
+          elif [ "${{ matrix.scheme }}" = "rootful" ]; then
+            SCHEME_FLAG="THEOS_PACKAGE_SCHEME="
           fi
           make clean
           make package \
