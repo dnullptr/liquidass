@@ -27,6 +27,26 @@ static BOOL gLGSliderControlsEnabled = NO;
 static BOOL gLGSegmentControlsEnabled = NO;
 static BOOL gLGControlsDiagnosticsEnabled = NO;
 
+static BOOL LGIsCarPlayControl(UIView *view) {
+    if (!view) return NO;
+    if (view.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomCarPlay) return YES;
+    UIWindow *window = view.window;
+    if (window) {
+        if (window.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomCarPlay) return YES;
+        if (window.screen.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomCarPlay) return YES;
+        NSString *winClass = NSStringFromClass(window.class);
+        if ([winClass containsString:@"CarPlay"] || [winClass hasPrefix:@"CP"]) return YES;
+        if (@available(iOS 13.0, *)) {
+            UIScene *scene = window.windowScene;
+            if (scene) {
+                if ([scene.session.role containsString:@"CarPlay"]) return YES;
+                if ([NSStringFromClass(scene.class) containsString:@"CarPlay"]) return YES;
+            }
+        }
+    }
+    return NO;
+}
+
 static id LGPreferenceSpecifierProperty(id specifier, NSString *key) {
     SEL selector = NSSelectorFromString(@"propertyForKey:");
     if (!specifier || ![specifier respondsToSelector:selector]) return nil;
@@ -695,7 +715,8 @@ static CGRect LGSettingsSliderOverlayFrame(UISlider *owner, UIView *container) {
 static void LGInstallSettingsSwitch(UISwitch *owner) {
     if (!gLGSwitchControlsEnabled || !owner.window ||
         [owner isKindOfClass:LGPrefsLiquidSwitch.class] ||
-        LGInsideLiquidAssPrefs(owner)) return;
+        LGInsideLiquidAssPrefs(owner) ||
+        LGIsCarPlayControl(owner)) return;
 
     LGPrefsLiquidSwitch *overlay =
         objc_getAssociatedObject(owner, kLGSettingsSwitchOverlayKey);
@@ -1051,7 +1072,8 @@ static void LGSegmentPresentGlass(UISegmentedControl *control,
 
 static void LGInstallSettingsSegment(UISegmentedControl *control) {
     if (!gLGSegmentControlsEnabled || !control.window ||
-        LGInsideLiquidAssPrefs(control)) return;
+        LGInsideLiquidAssPrefs(control) ||
+        LGIsCarPlayControl(control)) return;
 
     UIImageView *indicator = LGSegmentSelectionIndicator(control);
     if (!indicator) return;
@@ -1271,7 +1293,8 @@ static void LGSegmentAttachGesture(UISegmentedControl *control) {
 static void LGInstallSettingsSlider(UISlider *owner) {
     if (!gLGSliderControlsEnabled || !owner.window ||
         [owner isKindOfClass:LGPrefsLiquidSlider.class] ||
-        LGInsideLiquidAssPrefs(owner)) return;
+        LGInsideLiquidAssPrefs(owner) ||
+        LGIsCarPlayControl(owner)) return;
     if (!LGSliderUsesStockArtwork(owner)) {
         LGRemoveSettingsSliderOverlay(owner);
         return;
@@ -1585,8 +1608,9 @@ static UISwitch *LGSettingsOwnerForModernSwitchElement(UIView *element) {
 }
 
 static BOOL LGSettingsShouldSuppressModernSwitchElement(UIView *element) {
+    if (LGIsCarPlayControl(element)) return NO;
     UISwitch *owner = LGSettingsOwnerForModernSwitchElement(element);
-    if (!owner || !gLGSwitchControlsEnabled) return NO;
+    if (!owner || !gLGSwitchControlsEnabled || LGIsCarPlayControl(owner)) return NO;
     return [owner isKindOfClass:LGPrefsLiquidSwitch.class] ||
         objc_getAssociatedObject(owner, kLGSettingsSwitchOverlayKey) != nil;
 }
@@ -2236,20 +2260,27 @@ static void LGUpdateSettingsSidebar(UIView *container) {
 %hook UISwitchModernVisualElement
 - (void)didMoveToSuperview {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     if (gLGControlsDiagnosticsEnabled) gLGControlsModernSwitchMoves++;
     LGSettingsSuppressModernSwitchElementIfNeeded((UIView *)self);
 }
 - (void)didMoveToWindow {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     if (gLGControlsDiagnosticsEnabled) gLGControlsModernSwitchMoves++;
     LGSettingsSuppressModernSwitchElementIfNeeded((UIView *)self);
 }
 - (void)layoutSubviews {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     if (gLGControlsDiagnosticsEnabled) gLGControlsModernSwitchLayouts++;
     LGSettingsSuppressModernSwitchElementIfNeeded((UIView *)self);
 }
 - (void)setAlpha:(CGFloat)alpha {
+    if (LGIsCarPlayControl((UIView *)self)) {
+        %orig(alpha);
+        return;
+    }
     if (gLGControlsDiagnosticsEnabled) gLGControlsModernSwitchAlphaSets++;
     BOOL suppress = LGSettingsShouldSuppressModernSwitchElement((UIView *)self);
     %orig(suppress ? 0.0 : alpha);
@@ -2259,16 +2290,19 @@ static void LGUpdateSettingsSidebar(UIView *container) {
 %hook UISwitch
 - (void)didMoveToWindow {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     if (gLGControlsDiagnosticsEnabled) gLGControlsSwitchMoves++;
     LGProfiledInstallSettingsSwitch((UISwitch *)self);
 }
 - (void)layoutSubviews {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     if (gLGControlsDiagnosticsEnabled) gLGControlsSwitchLayouts++;
     LGProfiledInstallSettingsSwitch((UISwitch *)self);
 }
 - (void)setOn:(BOOL)on animated:(BOOL)animated {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     LGPrefsLiquidSwitch *overlay =
         objc_getAssociatedObject(self, kLGSettingsSwitchOverlayKey);
     if (overlay && overlay.isOn != on) [overlay setOn:on animated:animated];
@@ -2278,8 +2312,9 @@ static void LGUpdateSettingsSidebar(UIView *container) {
 %hook _UISlideriOSVisualElement
 - (void)didMoveToWindow {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     UISlider *owner = LGSettingsSliderOwnerForVisualElement((UIView *)self);
-    if (!owner || [owner isKindOfClass:LGPrefsLiquidSlider.class]) return;
+    if (!owner || [owner isKindOfClass:LGPrefsLiquidSlider.class] || LGIsCarPlayControl(owner)) return;
     if (gLGControlsDiagnosticsEnabled) gLGControlsSliderVisualMoves++;
     objc_setAssociatedObject(owner, kLGSettingsSliderVisualHostKey, self,
                              OBJC_ASSOCIATION_ASSIGN);
@@ -2287,8 +2322,9 @@ static void LGUpdateSettingsSidebar(UIView *container) {
 }
 - (void)layoutSubviews {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     UISlider *owner = LGSettingsSliderOwnerForVisualElement((UIView *)self);
-    if (!owner || [owner isKindOfClass:LGPrefsLiquidSlider.class]) return;
+    if (!owner || [owner isKindOfClass:LGPrefsLiquidSlider.class] || LGIsCarPlayControl(owner)) return;
     if (gLGControlsDiagnosticsEnabled) gLGControlsSliderVisualLayouts++;
     objc_setAssociatedObject(owner, kLGSettingsSliderVisualHostKey, self,
                              OBJC_ASSOCIATION_ASSIGN);
@@ -2299,14 +2335,17 @@ static void LGUpdateSettingsSidebar(UIView *container) {
 %hook UISegmentedControl
 - (void)didMoveToWindow {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     LGInstallSettingsSegment((UISegmentedControl *)self);
 }
 - (void)layoutSubviews {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     LGInstallSettingsSegment((UISegmentedControl *)self);
 }
 - (void)setSelectedSegmentIndex:(NSInteger)index {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     LGInstallSettingsSegment((UISegmentedControl *)self);
 }
 %end
@@ -2314,6 +2353,7 @@ static void LGUpdateSettingsSidebar(UIView *container) {
 %hook UISlider
 - (void)didMoveToWindow {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     if (gLGControlsDiagnosticsEnabled) {
         if ([self isKindOfClass:LGPrefsLiquidSlider.class]) gLGControlsSliderOverlayMoves++;
         else gLGControlsSliderOwnerMoves++;
@@ -2323,6 +2363,7 @@ static void LGUpdateSettingsSidebar(UIView *container) {
 }
 - (void)layoutSubviews {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     if (gLGControlsDiagnosticsEnabled) {
         if ([self isKindOfClass:LGPrefsLiquidSlider.class]) gLGControlsSliderOverlayLayouts++;
         else gLGControlsSliderOwnerLayouts++;
@@ -2332,6 +2373,7 @@ static void LGUpdateSettingsSidebar(UIView *container) {
 }
 - (void)setValue:(float)value animated:(BOOL)animated {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     LGPrefsLiquidSlider *overlay =
         objc_getAssociatedObject(self, kLGSettingsSliderOverlayKey);
     if (overlay && fabsf(overlay.value - value) > FLT_EPSILON)
@@ -2339,6 +2381,7 @@ static void LGUpdateSettingsSidebar(UIView *container) {
 }
 - (void)setMinimumValue:(float)value {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     if (![self isKindOfClass:LGPrefsLiquidSlider.class]) {
         if (gLGControlsDiagnosticsEnabled) gLGControlsSliderSetters++;
         LGProfiledInstallSettingsSlider((UISlider *)self);
@@ -2346,6 +2389,7 @@ static void LGUpdateSettingsSidebar(UIView *container) {
 }
 - (void)setMaximumValue:(float)value {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     if (![self isKindOfClass:LGPrefsLiquidSlider.class]) {
         if (gLGControlsDiagnosticsEnabled) gLGControlsSliderSetters++;
         LGProfiledInstallSettingsSlider((UISlider *)self);
@@ -2353,6 +2397,7 @@ static void LGUpdateSettingsSidebar(UIView *container) {
 }
 - (void)setEnabled:(BOOL)enabled {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     if (![self isKindOfClass:LGPrefsLiquidSlider.class]) {
         if (gLGControlsDiagnosticsEnabled) gLGControlsSliderSetters++;
         LGProfiledInstallSettingsSlider((UISlider *)self);
@@ -2360,6 +2405,7 @@ static void LGUpdateSettingsSidebar(UIView *container) {
 }
 - (void)setMinimumTrackTintColor:(UIColor *)color {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     if (![self isKindOfClass:LGPrefsLiquidSlider.class]) {
         if (gLGControlsDiagnosticsEnabled) gLGControlsSliderSetters++;
         LGProfiledInstallSettingsSlider((UISlider *)self);
@@ -2367,6 +2413,7 @@ static void LGUpdateSettingsSidebar(UIView *container) {
 }
 - (void)setMaximumTrackTintColor:(UIColor *)color {
     %orig;
+    if (LGIsCarPlayControl((UIView *)self)) return;
     if (![self isKindOfClass:LGPrefsLiquidSlider.class]) {
         if (gLGControlsDiagnosticsEnabled) gLGControlsSliderSetters++;
         LGProfiledInstallSettingsSlider((UISlider *)self);

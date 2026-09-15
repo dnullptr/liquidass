@@ -49,17 +49,18 @@ static NSArray<NSString *> *LGExportablePreferenceKeys(void) {
     return orderedKeys.array;
 }
 
+static NSString *LGNormalizeLanguageCode(NSString *code) {
+    if (!code.length || [code isEqualToString:@"Base"]) return nil;
+    if ([code isEqualToString:@"English"] || [code isEqualToString:@"en"]) return @"en";
+    if ([code isEqualToString:@"iw"] || [code isEqualToString:@"he"]) return @"he";
+    NSString *canon = [NSLocale canonicalLanguageIdentifierFromString:code] ?: code;
+    if ([canon isEqualToString:@"iw"] || [canon hasPrefix:@"he"]) return @"he";
+    if ([canon isEqualToString:@"English"] || [canon isEqualToString:@"en"]) return @"en";
+    return code;
+}
+
 static NSBundle *LGActiveLocalizationBundle(void) {
-    NSString *languageCode = [LGPrefsUIStateDefaults() stringForKey:kLGPrefsLanguageKey];
-    if (!languageCode.length) {
-        for (NSString *pref in [NSLocale preferredLanguages]) {
-            NSString *canon = [NSLocale canonicalLanguageIdentifierFromString:pref] ?: pref;
-            if ([canon hasPrefix:@"he"] || [canon hasPrefix:@"iw"]) {
-                languageCode = @"he";
-                break;
-            }
-        }
-    }
+    NSString *languageCode = LGCurrentPrefsLanguageCode();
     NSBundle *baseBundle = [NSBundle bundleForClass:[LGPRootListController class]];
     if (!languageCode.length || [languageCode isEqualToString:@"en"]) {
         return baseBundle;
@@ -119,30 +120,23 @@ static NSArray<NSDictionary *> *LGAvailableLanguageChoices(void) {
             for (NSString *item in items) {
                 if ([item.pathExtension isEqualToString:@"lproj"]) {
                     NSString *code = [item stringByDeletingPathExtension];
-                    if (code.length && ![code isEqualToString:@"Base"]) {
-                        if ([code isEqualToString:@"iw"]) code = @"he";
-                        [codes addObject:code];
-                    }
+                    NSString *norm = LGNormalizeLanguageCode(code);
+                    if (norm.length) [codes addObject:norm];
                 }
             }
         }
 
         // 2. Official NSBundle localizations property
         for (NSString *loc in [baseBundle localizations]) {
-            NSString *code = loc;
-            if ([code isEqualToString:@"iw"]) code = @"he";
-            if (code.length && ![code isEqualToString:@"Base"]) {
-                [codes addObject:code];
-            }
+            NSString *norm = LGNormalizeLanguageCode(loc);
+            if (norm.length) [codes addObject:norm];
         }
 
         // 3. Fallback: pathsForResourcesOfType
         for (NSString *path in [baseBundle pathsForResourcesOfType:@"lproj" inDirectory:nil]) {
             NSString *code = [[path lastPathComponent] stringByDeletingPathExtension];
-            if ([code isEqualToString:@"iw"]) code = @"he";
-            if (code.length && ![code isEqualToString:@"Base"]) {
-                [codes addObject:code];
-            }
+            NSString *norm = LGNormalizeLanguageCode(code);
+            if (norm.length) [codes addObject:norm];
         }
 
         // 4. Guaranteed check for Hebrew
@@ -239,7 +233,10 @@ NSString *LGPrefsAppName(void) {
 
 NSString *LGCurrentPrefsLanguageCode(void) {
     NSString *languageCode = [LGPrefsUIStateDefaults() stringForKey:kLGPrefsLanguageKey];
-    if (languageCode.length) return languageCode;
+    if (languageCode.length) {
+        NSString *norm = LGNormalizeLanguageCode(languageCode);
+        if (norm.length) return norm;
+    }
     for (NSString *pref in [NSLocale preferredLanguages]) {
         NSString *code = [NSLocale canonicalLanguageIdentifierFromString:pref] ?: pref;
         if ([code hasPrefix:@"he"] || [code hasPrefix:@"iw"]) {
@@ -251,10 +248,11 @@ NSString *LGCurrentPrefsLanguageCode(void) {
 
 void LGSetCurrentPrefsLanguageCode(NSString *languageCode) {
     NSUserDefaults *defaults = LGPrefsUIStateDefaults();
-    if (!languageCode.length || [languageCode isEqualToString:@"en"]) {
-        [defaults removeObjectForKey:kLGPrefsLanguageKey];
+    NSString *normalized = LGNormalizeLanguageCode(languageCode);
+    if (normalized.length) {
+        [defaults setObject:normalized forKey:kLGPrefsLanguageKey];
     } else {
-        [defaults setObject:languageCode forKey:kLGPrefsLanguageKey];
+        [defaults removeObjectForKey:kLGPrefsLanguageKey];
     }
     LGSynchronizeSurfaceStateDefaults();
     [[NSNotificationCenter defaultCenter] postNotificationName:kLGPrefsLanguageChangedNotification object:nil];

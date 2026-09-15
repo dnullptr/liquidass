@@ -378,6 +378,37 @@ static inline CGFloat LGTabBarSpringStep(CGFloat current,
 
 @end
 
+static BOOL LGIsCarPlayView(UIView *view) {
+    if (!view) return NO;
+    if (view.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomCarPlay) return YES;
+    UIWindow *window = view.window;
+    if (window) {
+        if (window.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomCarPlay) return YES;
+        if (window.screen.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomCarPlay) return YES;
+        NSString *winClass = NSStringFromClass(window.class);
+        if ([winClass containsString:@"CarPlay"] || [winClass hasPrefix:@"CP"]) return YES;
+        if (@available(iOS 13.0, *)) {
+            UIScene *scene = window.windowScene;
+            if (scene) {
+                if ([scene.session.role containsString:@"CarPlay"]) return YES;
+                if ([NSStringFromClass(scene.class) containsString:@"CarPlay"]) return YES;
+            }
+        }
+    }
+    return NO;
+}
+
+static BOOL LGIsCarPlayController(UIViewController *vc) {
+    if (!vc) return NO;
+    if (vc.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomCarPlay) return YES;
+    NSString *vcClass = NSStringFromClass(vc.class);
+    if ([vcClass containsString:@"CarPlay"] || [vcClass hasPrefix:@"CP"]) return YES;
+    if (@available(iOS 13.0, *)) {
+        if (vc.viewIfLoaded && LGIsCarPlayView(vc.viewIfLoaded)) return YES;
+    }
+    return NO;
+}
+
 static BOOL LGTabBarAllowed(void) {
     if (!lgHostEnabled(@"TabBar")) return NO;
     static BOOL excluded = NO;
@@ -401,6 +432,10 @@ static CGFloat LGTabBarAppliedOverhang(UITabBar *bar) {
 }
 
 static CGRect LGTabBarPillFrame(UITabBar *bar) {
+    if (LGIsCarPlayView(bar)) {
+        if (CGRectIsEmpty(bar.bounds)) return CGRectZero;
+        return CGRectInset(bar.bounds, 4.0, 2.0);
+    }
     BOOL landscape = LGTabBarUsesLandscapeMetrics(bar);
     const CGFloat height = landscape ? kLGTabBarLandscapeHeight : 64.0;
     const CGFloat minimumScreenInset = landscape ? 24.0 : 16.0;
@@ -459,7 +494,8 @@ static BOOL LGIsStockTabBar(UITabBar *bar) {
 
 static BOOL LGTabBarCanReceiveTouches(UITabBar *bar) {
     if (!LGTabBarAllowed() || !LGIsStockTabBar(bar) || !bar.window ||
-        bar.hidden || bar.alpha < 0.01 || !bar.userInteractionEnabled) return NO;
+        bar.hidden || bar.alpha < 0.01 || !bar.userInteractionEnabled ||
+        LGIsCarPlayView(bar)) return NO;
 
     for (UIView *view = bar.superview; view; view = view.superview) {
         if (view.hidden || view.alpha < 0.01) return NO;
@@ -618,22 +654,34 @@ static void LGApplyTabBarGlyphColor(UITabBar *bar, UIColor *color) {
 }
 
 static void LGSampleTabBarLuma(UITabBar *bar) {
-    if (!bar.window || CGRectIsEmpty(bar.bounds)) return;
+    if (!bar || !bar.window || CGRectIsEmpty(bar.bounds) || LGIsCarPlayView(bar)) return;
     CGRect rect = [bar convertRect:bar.bounds toView:bar.window];
-    UIGraphicsBeginImageContextWithOptions(CGSizeMake(1.0, 1.0), YES, 1.0);
-    CGContextRef context = UIGraphicsGetCurrentContext();
-    CGContextScaleCTM(context, 1.0 / CGRectGetWidth(rect),
-                      1.0 / CGRectGetHeight(rect));
-    CGContextTranslateCTM(context, -CGRectGetMinX(rect), -CGRectGetMinY(rect));
-    float opacity = bar.layer.opacity;
-    bar.layer.opacity = 0.0;
-    [bar.window.layer renderInContext:context];
-    bar.layer.opacity = opacity;
-    CGImageRef image = UIGraphicsGetImageFromCurrentImageContext().CGImage;
-    UIGraphicsEndImageContext();
+    if (CGRectGetWidth(rect) < 1.0 || CGRectGetHeight(rect) < 1.0) return;
+
+    CGImageRef image = NULL;
+    @try {
+        UIGraphicsBeginImageContextWithOptions(CGSizeMake(1.0, 1.0), YES, 1.0);
+        CGContextRef context = UIGraphicsGetCurrentContext();
+        if (context) {
+            CGContextScaleCTM(context, 1.0 / CGRectGetWidth(rect),
+                              1.0 / CGRectGetHeight(rect));
+            CGContextTranslateCTM(context, -CGRectGetMinX(rect), -CGRectGetMinY(rect));
+            float opacity = bar.layer.opacity;
+            bar.layer.opacity = 0.0;
+            [bar.window.layer renderInContext:context];
+            bar.layer.opacity = opacity;
+            UIImage *ctxImg = UIGraphicsGetImageFromCurrentImageContext();
+            image = ctxImg ? (CGImageRef)CFRetain(ctxImg.CGImage) : NULL;
+        }
+        UIGraphicsEndImageContext();
+    } @catch (__unused NSException *e) {
+        UIGraphicsEndImageContext();
+        return;
+    }
     if (!image) return;
 
     CFDataRef data = CGDataProviderCopyData(CGImageGetDataProvider(image));
+    CGImageRelease(image);
     const UInt8 *pixel = data ? CFDataGetBytePtr(data) : NULL;
     if (!pixel) {
         if (data) CFRelease(data);
@@ -649,11 +697,12 @@ static void LGSampleTabBarLuma(UITabBar *bar) {
 }
 
 static void LGStartTabBarLumaSampling(UITabBar *bar) {
+    if (!bar || LGIsCarPlayView(bar)) return;
     if (objc_getAssociatedObject(bar, kLGTabBarLumaTimerKey)) return;
     __weak UITabBar *weakBar = bar;
     NSTimer *timer = [NSTimer timerWithTimeInterval:0.35 repeats:YES block:^(__unused NSTimer *unused) {
         UITabBar *strongBar = weakBar;
-        if (strongBar && LGTabBarAllowed()) LGSampleTabBarLuma(strongBar);
+        if (strongBar && LGTabBarAllowed() && !LGIsCarPlayView(strongBar)) LGSampleTabBarLuma(strongBar);
     }];
     [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
     objc_setAssociatedObject(bar, kLGTabBarLumaTimerKey, timer,
@@ -970,7 +1019,7 @@ static void LGAnimateTabBarScale(UITabBar *bar, BOOL pressed) {
 }
 
 static void LGConfigureTabBarAppearance(UITabBar *bar) {
-    if (!bar || !LGTabBarAllowed() || !LGIsStockTabBar(bar)) return;
+    if (!bar || !LGTabBarAllowed() || !LGIsStockTabBar(bar) || LGIsCarPlayView(bar)) return;
     if ([objc_getAssociatedObject(bar, kLGTabBarAppearanceConfiguredKey) boolValue]) return;
     objc_setAssociatedObject(bar, kLGTabBarAppearanceConfiguredKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
@@ -1010,7 +1059,9 @@ static void LGStyleStockTabBar(UITabBar *bar) {
     if (!LGIsStockTabBar(bar) || !bar.window ||
         [objc_getAssociatedObject(bar, kLGTabBarStylingKey) boolValue]) return;
 
-    LGConfigureTabBarAppearance(bar);
+    if (!LGIsCarPlayView(bar)) {
+        LGConfigureTabBarAppearance(bar);
+    }
 
     objc_setAssociatedObject(bar, kLGTabBarStylingKey, @YES,
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1056,6 +1107,11 @@ static void LGStyleStockTabBar(UITabBar *bar) {
     }
 
     CGRect pillFrame = LGTabBarPillFrame(bar);
+    if (CGRectIsEmpty(pillFrame)) {
+        objc_setAssociatedObject(bar, kLGTabBarStylingKey, nil,
+                                 OBJC_ASSOCIATION_ASSIGN);
+        return;
+    }
     const CGFloat height = CGRectGetHeight(pillFrame);
 
     LGTabBarVibranceView *vibrance = objc_getAssociatedObject(bar, kLGTabBarVibranceKey);
@@ -1118,6 +1174,12 @@ static void LGStyleStockTabBar(UITabBar *bar) {
         glass.layer.cornerRadius = height * 0.5;
     if (@available(iOS 13.0, *)) glass.layer.cornerCurve = kCACornerCurveContinuous;
     glass.layer.masksToBounds = YES;
+
+    if (LGIsCarPlayView(bar)) {
+        objc_setAssociatedObject(bar, kLGTabBarStylingKey, nil,
+                                 OBJC_ASSOCIATION_ASSIGN);
+        return;
+    }
 
     NSArray<UIView *> *buttons = LGStockTabBarButtons(bar);
     if (buttons.count) {
@@ -1188,9 +1250,9 @@ static UITabBar *LGTabBarForButton(UIView *button) {
 }
 
 static BOOL LGTabBarRemapButtonFrame(UIView *button, CGRect *frame) {
-    if (!button || !LGTabBarAllowed()) return NO;
+    if (!button || !LGTabBarAllowed() || LGIsCarPlayView(button)) return NO;
     UITabBar *bar = LGTabBarForButton(button);
-    if (!bar || !LGIsStockTabBar(bar) || !bar.window) return NO;
+    if (!bar || !LGIsStockTabBar(bar) || !bar.window || LGIsCarPlayView(bar)) return NO;
     if (!objc_getAssociatedObject(bar, kLGTabBarGlassKey)) return NO;
 
     CGFloat barWidth = CGRectGetWidth(bar.bounds);
@@ -1840,7 +1902,9 @@ static void LGScheduleTabBarDump(UITabBar *bar, NSString *reason) {
     %orig;
     if (self.window) {
         LGHookTabBarHostControllers();
-        LGConfigureTabBarAppearance(self);
+        if (!LGIsCarPlayView(self)) {
+            LGConfigureTabBarAppearance(self);
+        }
         LGStyleStockTabBar(self);
         LGScheduleTabBarDump(self, @"didMoveToWindow");
     }
@@ -1849,7 +1913,7 @@ static void LGScheduleTabBarDump(UITabBar *bar, NSString *reason) {
 - (void)layoutSubviews {
     %orig;
     LGStyleStockTabBar(self);
-    if (LGTabBarAllowed()) LGStartTabBarLumaSampling(self);
+    if (LGTabBarAllowed() && !LGIsCarPlayView(self)) LGStartTabBarLumaSampling(self);
     LGScheduleTabBarDump(self, @"layoutSubviews");
 }
 
@@ -1860,7 +1924,7 @@ static void LGScheduleTabBarDump(UITabBar *bar, NSString *reason) {
 
 - (CGSize)sizeThatFits:(CGSize)size {
     CGSize fitted = %orig;
-    if (!LGTabBarAllowed() || !LGIsStockTabBar(self)) return fitted;
+    if (!LGTabBarAllowed() || !LGIsStockTabBar(self) || LGIsCarPlayView(self)) return fitted;
     CGFloat content = fitted.height - self.safeAreaInsets.bottom;
     CGFloat overhang = MAX(0.0, LGTabBarRequiredContentHeight(self) - content);
     objc_setAssociatedObject(self, kLGTabBarAppliedOverhangKey, @(overhang),
@@ -1887,7 +1951,7 @@ static void LGScheduleTabBarDump(UITabBar *bar, NSString *reason) {
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    if (!LGTabBarAllowed()) return;
+    if (!LGTabBarAllowed() || LGIsCarPlayController(self)) return;
 
     NSArray<UIViewController *> *vcs = self.viewControllers;
     if (vcs.count <= 1) return;
@@ -1906,7 +1970,7 @@ static void LGScheduleTabBarDump(UITabBar *bar, NSString *reason) {
 }
 
 - (void)tabBar:(UITabBar *)tabBar didSelectItem:(UITabBarItem *)item {
-    if (!LGTabBarAllowed() || !LGIsStockTabBar(tabBar)) {
+    if (!LGTabBarAllowed() || !LGIsStockTabBar(tabBar) || LGIsCarPlayView(tabBar) || LGIsCarPlayController(self)) {
         %orig;
         return;
     }
@@ -1969,6 +2033,7 @@ static void LGHookedHostDidLayout(id self, SEL _cmd) {
     }
     if (orig) ((void (*)(id, SEL))orig)(self, _cmd);
     if (!LGTabBarAllowed()) return;
+    if ([self isKindOfClass:[UIViewController class]] && LGIsCarPlayController((UIViewController *)self)) return;
     if (![self respondsToSelector:@selector(view)]) return;
     UIView *view = ((UIView *(*)(id, SEL))objc_msgSend)(self, @selector(view));
     if (view) LGRefreshTabBarsInView(view);
@@ -2029,20 +2094,20 @@ static void LGHookTabBarHostControllers(void) {
 - (void)layoutSubviews {
     %orig;
     UITabBar *bar = LGTabBarForButton(self);
-    if (LGTabBarAllowed() && LGIsStockTabBar(bar))
+    if (LGTabBarAllowed() && LGIsStockTabBar(bar) && !LGIsCarPlayView(self) && !LGIsCarPlayView(bar))
         LGCenterStockTabBarButtonContent(self);
 }
 
 - (BOOL)beginTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
     BOOL tracking = %orig;
-    if (tracking && LGTabBarAllowed())
+    if (tracking && LGTabBarAllowed() && !LGIsCarPlayView(self))
         LGShowTabBarSelectionLens(self, touch);
     return tracking;
 }
 
 - (BOOL)continueTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
     BOOL tracking = %orig;
-    if (!LGTabBarAllowed()) return tracking;
+    if (!LGTabBarAllowed() || LGIsCarPlayView(self)) return tracking;
     LGTabBarMotionState *state =
         LGTabBarMotionStateForBar(LGTabBarForButton(self), NO);
     if (tracking || state.active) LGMoveTabBarSelectionLens(self, touch);
@@ -2051,14 +2116,14 @@ static void LGHookTabBarHostControllers(void) {
 
 - (void)endTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
     %orig;
-    if (!LGTabBarAllowed()) return;
+    if (!LGTabBarAllowed() || LGIsCarPlayView(self)) return;
     LGCommitTabBarSelectionAtLens(self, touch);
     LGHideTabBarSelectionLens(self);
 }
 
 - (void)cancelTrackingWithEvent:(UIEvent *)event {
     %orig;
-    if (LGTabBarAllowed()) LGHideTabBarSelectionLens(self);
+    if (LGTabBarAllowed() && !LGIsCarPlayView(self)) LGHideTabBarSelectionLens(self);
 }
 
 %end
